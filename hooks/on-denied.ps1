@@ -47,15 +47,39 @@ function Show-YesNo {
     param([string]$Title, [string]$Message)
 
     $isWin = $IsWindows -or ($PSVersionTable.Platform -eq $null) -or ($PSVersionTable.Platform -eq 'Win32NT')
+    $userHomeLocal = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
+    $errLog = Join-Path $userHomeLocal '.claude/hooks/logs/dialog-error.log'
 
     if ($isWin) {
-        Add-Type -AssemblyName System.Windows.Forms | Out-Null
-        $r = [System.Windows.Forms.MessageBox]::Show(
-            $Message, $Title,
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Warning,
-            [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
-        return $r -eq [System.Windows.Forms.DialogResult]::Yes
+        # WScript.Shell.Popup is a thin COM wrapper around Win32 MessageBox that
+        # accepts the MB_SETFOREGROUND (0x10000) and MB_SYSTEMMODAL (0x1000) flags.
+        # Without these, MessageBox spawned from a background/non-foreground process
+        # can return immediately with the default button result (= No), or render
+        # behind other windows. Popup gives us a single reliable cross-host path.
+        # Button codes: 0=Cancel/timeout, 6=Yes, 7=No.
+        # Type flags: 4=YesNo, 48=Warning icon, 256=DefaultButton2, 4096=SystemModal,
+        # 65536=SetForeground.
+        try {
+            $shell = New-Object -ComObject WScript.Shell
+            $code  = $shell.Popup($Message, 0, $Title, 4 + 48 + 256 + 4096 + 65536)
+            "$(Get-Date -Format 'o') WScript.Shell.Popup code=$code" | Add-Content -Path $errLog
+            return $code -eq 6
+        } catch {
+            "$(Get-Date -Format 'o') WScript.Shell.Popup failed: $_" | Add-Content -Path $errLog
+            try {
+                Add-Type -AssemblyName System.Windows.Forms | Out-Null
+                $r = [System.Windows.Forms.MessageBox]::Show(
+                    $Message, $Title,
+                    [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning,
+                    [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+                "$(Get-Date -Format 'o') Forms fallback result=$r" | Add-Content -Path $errLog
+                return $r -eq [System.Windows.Forms.DialogResult]::Yes
+            } catch {
+                "$(Get-Date -Format 'o') Forms fallback also failed: $_" | Add-Content -Path $errLog
+                return $false
+            }
+        }
     }
 
     if ($IsMacOS) {
