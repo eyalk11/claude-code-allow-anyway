@@ -1,0 +1,5 @@
+*.bak
+*.bak.*
+hooks/logs/
+hooks/session-allows-*.jsonl
+hooks/.one-shot-allow.json
